@@ -182,7 +182,8 @@ class KTX2Loader extends Loader {
 
 		}
 
-		return this.formatParser.getTranscoderFormat( basisFormat, width, height, hasAlpha );
+		const { engineFormat } = this.formatParser.getTranscoderFormat( basisFormat, width, height, hasAlpha );
+		return engineFormat;
 
 	}
 
@@ -831,9 +832,9 @@ function parseColorSpace( container ) {
 
 function createFormatParser( config ) {
 
-	const TranscoderFormat = _TranscoderFormat != undefined ? _TranscoderFormat : KTX2Loader.TranscoderFormat; // eslint-disable-line no-undef
-	const EngineFormat = _EngineFormat != undefined ? _EngineFormat : KTX2Loader.EngineFormat; // eslint-disable-line no-undef
-	const BasisFormat = _BasisFormat != undefined ? _BasisFormat : KTX2Loader.BasisFormat; // eslint-disable-line no-undef
+	const TranscoderFormat = typeof _TranscoderFormat != 'undefined' ? _TranscoderFormat : KTX2Loader.TranscoderFormat; // eslint-disable-line no-undef
+	const EngineFormat = typeof _EngineFormat != 'undefined' ? _EngineFormat : KTX2Loader.EngineFormat; // eslint-disable-line no-undef
+	const BasisFormat = typeof _BasisFormat != 'undefined' ? _BasisFormat : KTX2Loader.BasisFormat; // eslint-disable-line no-undef
 
 	// Optimal choice of a transcoder target format depends on the Basis format (ETC1S or UASTC),
 	// device capabilities, and texture dimensions. The list below ranks the formats separately
