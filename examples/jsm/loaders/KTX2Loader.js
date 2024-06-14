@@ -91,6 +91,8 @@ class KTX2Loader extends Loader {
 		this.workerSourceURL = '';
 		this.workerConfig = null;
 
+		this.formatParser = null;
+
 		if ( typeof MSC_TRANSCODER !== 'undefined' ) {
 
 			console.warn(
@@ -166,6 +168,24 @@ class KTX2Loader extends Loader {
 
 	}
 
+	getTranscoderFormat( basisFormat, width, height, hasAlpha ) {
+
+		if ( this.workerConfig == null ) {
+
+			throw new Error( 'THREE.KTX2Loader: Missing initialization with `.detectSupport( renderer )`.' );
+
+		}
+
+		if ( ! this.formatParser ) {
+
+			this.formatParser = createFormatParser( this.workerConfig );
+
+		}
+
+		return this.formatParser.getTranscoderFormat( basisFormat, width, height, hasAlpha );
+
+	}
+
 	init() {
 
 		if ( ! this.transcoderPending ) {
@@ -196,6 +216,7 @@ class KTX2Loader extends Loader {
 						'/* basis_transcoder.js */',
 						jsContent,
 						'/* worker */',
+						createFormatParser.toString(),
 						fn.substring( fn.indexOf( '{' ) + 1, fn.lastIndexOf( '}' ) )
 					].join( '\n' );
 
@@ -393,11 +414,10 @@ KTX2Loader.EngineFormat = {
 KTX2Loader.BasisWorker = function () {
 
 	let config;
+	let formatParser;
 	let transcoderPending;
 	let BasisModule;
 
-	const EngineFormat = _EngineFormat; // eslint-disable-line no-undef
-	const TranscoderFormat = _TranscoderFormat; // eslint-disable-line no-undef
 	const BasisFormat = _BasisFormat; // eslint-disable-line no-undef
 
 	self.addEventListener( 'message', function ( e ) {
@@ -436,6 +456,8 @@ KTX2Loader.BasisWorker = function () {
 	} );
 
 	function init( wasmBinary ) {
+
+		formatParser = createFormatParser( config );
 
 		transcoderPending = new Promise( ( resolve ) => {
 
@@ -483,7 +505,7 @@ KTX2Loader.BasisWorker = function () {
 		const hasAlpha = ktx2File.getHasAlpha();
 		const dfdFlags = ktx2File.getDFDFlags();
 
-		const { transcoderFormat, engineFormat } = getTranscoderFormat( basisFormat, width, height, hasAlpha );
+		const { transcoderFormat, engineFormat } = formatParser.getTranscoderFormat( basisFormat, width, height, hasAlpha );
 
 		if ( ! width || ! height || ! levelCount ) {
 
@@ -569,121 +591,6 @@ KTX2Loader.BasisWorker = function () {
 	}
 
 	//
-
-	// Optimal choice of a transcoder target format depends on the Basis format (ETC1S or UASTC),
-	// device capabilities, and texture dimensions. The list below ranks the formats separately
-	// for ETC1S and UASTC.
-	//
-	// In some cases, transcoding UASTC to RGBA32 might be preferred for higher quality (at
-	// significant memory cost) compared to ETC1/2, BC1/3, and PVRTC. The transcoder currently
-	// chooses RGBA32 only as a last resort and does not expose that option to the caller.
-	const FORMAT_OPTIONS = [
-		{
-			if: 'astcSupported',
-			basisFormat: [ BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.ASTC_4x4, TranscoderFormat.ASTC_4x4 ],
-			engineFormat: [ EngineFormat.RGBA_ASTC_4x4_Format, EngineFormat.RGBA_ASTC_4x4_Format ],
-			priorityETC1S: Infinity,
-			priorityUASTC: 1,
-			needsPowerOfTwo: false,
-		},
-		{
-			if: 'bptcSupported',
-			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.BC7_M5, TranscoderFormat.BC7_M5 ],
-			engineFormat: [ EngineFormat.RGBA_BPTC_Format, EngineFormat.RGBA_BPTC_Format ],
-			priorityETC1S: 3,
-			priorityUASTC: 2,
-			needsPowerOfTwo: false,
-		},
-		{
-			if: 'dxtSupported',
-			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.BC1, TranscoderFormat.BC3 ],
-			engineFormat: [ EngineFormat.RGBA_S3TC_DXT1_Format, EngineFormat.RGBA_S3TC_DXT5_Format ],
-			priorityETC1S: 4,
-			priorityUASTC: 5,
-			needsPowerOfTwo: false,
-		},
-		{
-			if: 'etc2Supported',
-			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.ETC1, TranscoderFormat.ETC2 ],
-			engineFormat: [ EngineFormat.RGB_ETC2_Format, EngineFormat.RGBA_ETC2_EAC_Format ],
-			priorityETC1S: 1,
-			priorityUASTC: 3,
-			needsPowerOfTwo: false,
-		},
-		{
-			if: 'etc1Supported',
-			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.ETC1 ],
-			engineFormat: [ EngineFormat.RGB_ETC1_Format ],
-			priorityETC1S: 2,
-			priorityUASTC: 4,
-			needsPowerOfTwo: false,
-		},
-		{
-			if: 'pvrtcSupported',
-			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
-			transcoderFormat: [ TranscoderFormat.PVRTC1_4_RGB, TranscoderFormat.PVRTC1_4_RGBA ],
-			engineFormat: [ EngineFormat.RGB_PVRTC_4BPPV1_Format, EngineFormat.RGBA_PVRTC_4BPPV1_Format ],
-			priorityETC1S: 5,
-			priorityUASTC: 6,
-			needsPowerOfTwo: true,
-		},
-	];
-
-	const ETC1S_OPTIONS = FORMAT_OPTIONS.sort( function ( a, b ) {
-
-		return a.priorityETC1S - b.priorityETC1S;
-
-	} );
-	const UASTC_OPTIONS = FORMAT_OPTIONS.sort( function ( a, b ) {
-
-		return a.priorityUASTC - b.priorityUASTC;
-
-	} );
-
-	function getTranscoderFormat( basisFormat, width, height, hasAlpha ) {
-
-		let transcoderFormat;
-		let engineFormat;
-
-		const options = basisFormat === BasisFormat.ETC1S ? ETC1S_OPTIONS : UASTC_OPTIONS;
-
-		for ( let i = 0; i < options.length; i ++ ) {
-
-			const opt = options[ i ];
-
-			if ( ! config[ opt.if ] ) continue;
-			if ( ! opt.basisFormat.includes( basisFormat ) ) continue;
-			if ( hasAlpha && opt.transcoderFormat.length < 2 ) continue;
-			if ( opt.needsPowerOfTwo && ! ( isPowerOfTwo( width ) && isPowerOfTwo( height ) ) ) continue;
-
-			transcoderFormat = opt.transcoderFormat[ hasAlpha ? 1 : 0 ];
-			engineFormat = opt.engineFormat[ hasAlpha ? 1 : 0 ];
-
-			return { transcoderFormat, engineFormat };
-
-		}
-
-		console.warn( 'THREE.KTX2Loader: No suitable compressed texture format found. Decoding to RGBA32.' );
-
-		transcoderFormat = TranscoderFormat.RGBA32;
-		engineFormat = EngineFormat.RGBAFormat;
-
-		return { transcoderFormat, engineFormat };
-
-	}
-
-	function isPowerOfTwo( value ) {
-
-		if ( value <= 2 ) return true;
-
-		return ( value & ( value - 1 ) ) === 0 && value !== 0;
-
-	}
 
 	/** Concatenates N byte arrays. */
 	function concat( arrays ) {
@@ -919,6 +826,128 @@ function parseColorSpace( container ) {
 		return NoColorSpace;
 
 	}
+
+}
+
+function createFormatParser( config ) {
+
+	const TranscoderFormat = _TranscoderFormat != undefined ? _TranscoderFormat : KTX2Loader.TranscoderFormat; // eslint-disable-line no-undef
+	const EngineFormat = _EngineFormat != undefined ? _EngineFormat : KTX2Loader.EngineFormat; // eslint-disable-line no-undef
+	const BasisFormat = _BasisFormat != undefined ? _BasisFormat : KTX2Loader.BasisFormat; // eslint-disable-line no-undef
+
+	// Optimal choice of a transcoder target format depends on the Basis format (ETC1S or UASTC),
+	// device capabilities, and texture dimensions. The list below ranks the formats separately
+	// for ETC1S and UASTC.
+	//
+	// In some cases, transcoding UASTC to RGBA32 might be preferred for higher quality (at
+	// significant memory cost) compared to ETC1/2, BC1/3, and PVRTC. The transcoder currently
+	// chooses RGBA32 only as a last resort and does not expose that option to the caller.
+	const FORMAT_OPTIONS = [
+		{
+			if: 'astcSupported',
+			basisFormat: [ BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.ASTC_4x4, TranscoderFormat.ASTC_4x4 ],
+			engineFormat: [ EngineFormat.RGBA_ASTC_4x4_Format, EngineFormat.RGBA_ASTC_4x4_Format ],
+			priorityETC1S: Infinity,
+			priorityUASTC: 1,
+			needsPowerOfTwo: false,
+		},
+		{
+			if: 'bptcSupported',
+			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.BC7_M5, TranscoderFormat.BC7_M5 ],
+			engineFormat: [ EngineFormat.RGBA_BPTC_Format, EngineFormat.RGBA_BPTC_Format ],
+			priorityETC1S: 3,
+			priorityUASTC: 2,
+			needsPowerOfTwo: false,
+		},
+		{
+			if: 'dxtSupported',
+			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.BC1, TranscoderFormat.BC3 ],
+			engineFormat: [ EngineFormat.RGBA_S3TC_DXT1_Format, EngineFormat.RGBA_S3TC_DXT5_Format ],
+			priorityETC1S: 4,
+			priorityUASTC: 5,
+			needsPowerOfTwo: false,
+		},
+		{
+			if: 'etc2Supported',
+			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.ETC1, TranscoderFormat.ETC2 ],
+			engineFormat: [ EngineFormat.RGB_ETC2_Format, EngineFormat.RGBA_ETC2_EAC_Format ],
+			priorityETC1S: 1,
+			priorityUASTC: 3,
+			needsPowerOfTwo: false,
+		},
+		{
+			if: 'etc1Supported',
+			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.ETC1 ],
+			engineFormat: [ EngineFormat.RGB_ETC1_Format ],
+			priorityETC1S: 2,
+			priorityUASTC: 4,
+			needsPowerOfTwo: false,
+		},
+		{
+			if: 'pvrtcSupported',
+			basisFormat: [ BasisFormat.ETC1S, BasisFormat.UASTC_4x4 ],
+			transcoderFormat: [ TranscoderFormat.PVRTC1_4_RGB, TranscoderFormat.PVRTC1_4_RGBA ],
+			engineFormat: [ EngineFormat.RGB_PVRTC_4BPPV1_Format, EngineFormat.RGBA_PVRTC_4BPPV1_Format ],
+			priorityETC1S: 5,
+			priorityUASTC: 6,
+			needsPowerOfTwo: true,
+		},
+	];
+
+	const ETC1S_OPTIONS = FORMAT_OPTIONS.sort( function ( a, b ) {
+
+		return a.priorityETC1S - b.priorityETC1S;
+
+	} );
+	const UASTC_OPTIONS = FORMAT_OPTIONS.sort( function ( a, b ) {
+
+		return a.priorityUASTC - b.priorityUASTC;
+
+	} );
+
+	function getTranscoderFormat( basisFormat, width, height, hasAlpha ) {
+
+		const options = basisFormat === BasisFormat.ETC1S ? ETC1S_OPTIONS : UASTC_OPTIONS;
+
+		for ( let i = 0; i < options.length; i ++ ) {
+
+			const opt = options[ i ];
+
+			if ( ! config[ opt.if ] ) continue;
+			if ( ! opt.basisFormat.includes( basisFormat ) ) continue;
+			if ( hasAlpha && opt.transcoderFormat.length < 2 ) continue;
+			if ( opt.needsPowerOfTwo && ! ( isPowerOfTwo( width ) && isPowerOfTwo( height ) ) ) continue;
+
+			return {
+				transcoderFormat: opt.transcoderFormat[ hasAlpha ? 1 : 0 ],
+				engineFormat: opt.engineFormat[ hasAlpha ? 1 : 0 ],
+			};
+
+		}
+
+		console.warn( 'THREE.KTX2Loader: No suitable compressed texture format found. Decoding to RGBA32.' );
+
+		return {
+			transcoderFormat: TranscoderFormat.RGBA32,
+			engineFormat: EngineFormat.RGBAFormat,
+		};
+
+	}
+
+	function isPowerOfTwo( value ) {
+
+		if ( value <= 2 ) return true;
+
+		return ( value & ( value - 1 ) ) === 0 && value !== 0;
+
+	}
+
+	return { getTranscoderFormat };
 
 }
 
